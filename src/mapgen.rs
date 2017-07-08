@@ -1,5 +1,6 @@
 
 use std::cmp;
+use std::ops;
 use rand::{self, Rng};
 
 // size of the map
@@ -11,7 +12,38 @@ const ROOM_MAX_SIZE: i32 = 10;
 const ROOM_MIN_SIZE: i32 = 6;
 const MAX_ROOMS: i32 = 30;
 
-pub type Map = Vec<Vec<Tile>>;
+pub struct Map(Vec<Vec<Tile>>);
+
+impl Map {
+    pub fn distance(x0: i32, y0: i32, x1: i32, y1: i32) -> f32 {
+        let dx = x1 - x0;
+        let dy = y1 - y0;
+        let d2 = dx*dx + dy*dy;
+        (d2 as f32).sqrt()
+    }
+
+    pub fn clear_light(&mut self) {
+        for mut row in self.0.iter_mut() {
+            for mut cell in row.iter_mut() {
+                cell.light_intensity = 0.0;
+            }
+        }
+    }
+}
+
+impl ops::Index<usize> for Map {
+    type Output = Vec<Tile>;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.0[index]
+    }
+}
+
+impl ops::IndexMut<usize> for Map {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.0[index]
+    }
+}
 
 /// A tile of the map and its properties
 #[derive(Clone, Copy, Debug)]
@@ -19,6 +51,7 @@ pub struct Tile {
     pub blocked: bool,
     pub explored: bool,
     pub block_sight: bool,
+    pub light_intensity: f32,
 }
 
 impl Tile {
@@ -27,6 +60,7 @@ impl Tile {
             blocked: false,
             explored: false,
             block_sight: false,
+            light_intensity: 0.0,
         }
     }
 
@@ -35,6 +69,7 @@ impl Tile {
             blocked: true,
             explored: false,
             block_sight: true,
+            light_intensity: 0.0,
         }
     }
 }
@@ -96,7 +131,7 @@ fn create_v_tunnel(y1: i32, y2: i32, x: i32, map: &mut Map) {
 
 pub fn make_map() -> (Map, (i32, i32)) {
     // fill map with "blocked" tiles
-    let mut map = vec![vec![Tile::wall(); MAP_HEIGHT as usize]; MAP_WIDTH as usize];
+    let mut map = Map(vec![vec![Tile::wall(); MAP_HEIGHT as usize]; MAP_WIDTH as usize]);
 
     let mut rooms = vec![];
 

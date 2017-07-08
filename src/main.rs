@@ -1,10 +1,11 @@
 extern crate tcod;
 extern crate rand;
 
-
+use rand::distributions::{Normal, IndependentSample};
 use tcod::console::*;
-use tcod::colors::{self, Color};
+use tcod::colors::{self, Color, lerp};
 use tcod::map::{Map as FovMap, FovAlgorithm};
+use tcod::input::{self, Event, Key};
 
 use mapgen::*;
 
@@ -15,9 +16,9 @@ const SCREEN_HEIGHT: i32 = 50;
 
 const LIMIT_FPS: i32 = 20;
 
-const FOV_ALGO: FovAlgorithm = FovAlgorithm::Shadow; // default FOV algorithm
+const FOV_ALGO: FovAlgorithm = FovAlgorithm::Shadow;
 const FOV_LIGHT_WALLS: bool = true; // light walls or not
-const TORCH_RADIUS: i32 = 200;
+const SIGHT_RADIUS: i32 = 100;
 
 const COLOR_DARK_WALL: Color = Color { r: 0, g: 0, b: 100 };
 const COLOR_LIGHT_WALL: Color = Color {
@@ -36,6 +37,17 @@ const COLOR_LIGHT_GROUND: Color = Color {
     b: 50,
 };
 
+const COLOR_FOG_GROUND: Color = Color {
+    r: 25,
+    g: 25,
+    b: 75,
+};
+const COLOR_FOG_WALL: Color = Color {
+    r: 0,
+    g: 0,
+    b: 50,
+};
+
 /// This is a generic object: the player, a monster, an item, the stairs...
 /// It's always represented by a character on screen.
 #[derive(Debug)]
@@ -44,6 +56,7 @@ struct Object {
     y: i32,
     char: char,
     color: Color,
+    pub torch_distance: i32,
 }
 
 impl Object {
@@ -53,6 +66,7 @@ impl Object {
             y: y,
             char: char,
             color: color,
+            torch_distance: 0,
         }
     }
 
@@ -82,27 +96,56 @@ fn render_all(root: &mut Root,
               map: &mut Map,
               fov_map: &mut FovMap,
               fov_recompute: bool) {
-    if fov_recompute {
+    // Compute lighting
+    map.clear_light();
+    for object in objects {
+        if object.torch_distance > 0 {
+            let torch_intensity_shift = Normal::new(0.0, 0.05).ind_sample(&mut rand::thread_rng()) as f32;
+            let td = object.torch_distance;
+            fov_map.compute_fov(object.x, object.y, td, FOV_LIGHT_WALLS, FOV_ALGO);
+            for y in (object.y - td)..(object.y + td + 1) {
+                if y < 0 || y >= MAP_HEIGHT {
+                    continue;
+                }
+                for x in (object.x - td)..(object.x + td + 1) {
+                    if x < 0 || x >= MAP_WIDTH {
+                        continue;
+                    }
+                    if fov_map.is_in_fov(x, y) {
+                        let d = 1.0 - Map::distance(object.x, object.y, x, y) / (td as f32) + torch_intensity_shift;
+                        map[x as usize][y as usize].light_intensity += d;
+                    }
+                }
+            }
+        }
+    }
+
+    if true {
         // recompute FOV if needed (the player moved or something)
         let player = &objects[0];
-        fov_map.compute_fov(player.x, player.y, TORCH_RADIUS, FOV_LIGHT_WALLS, FOV_ALGO);
+        fov_map.compute_fov(player.x, player.y, SIGHT_RADIUS, FOV_LIGHT_WALLS, FOV_ALGO);
 
         // go through all tiles, and set their background color
         for y in 0..MAP_HEIGHT {
             for x in 0..MAP_WIDTH {
                 let visible = fov_map.is_in_fov(x, y);
                 let wall = map[x as usize][y as usize].block_sight;
+                let intensity = map[x as usize][y as usize].light_intensity.min(1.0).max(0.0);
                 let color = match (visible, wall) {
                     // outside of field of view:
-                    (false, true) => COLOR_DARK_WALL,
-                    (false, false) => COLOR_DARK_GROUND,
+                    (false, true) => COLOR_FOG_WALL,
+                    (false, false) => COLOR_FOG_GROUND,
                     // inside fov:
-                    (true, true) => COLOR_LIGHT_WALL,
-                    (true, false) => COLOR_LIGHT_GROUND,
+                    (true, true) => {
+                        lerp(COLOR_DARK_WALL, COLOR_LIGHT_WALL, intensity)
+                    },
+                    (true, false) => {
+                        lerp(COLOR_DARK_GROUND, COLOR_LIGHT_GROUND, intensity)
+                    },
                 };
 
                 let explored = &mut map[x as usize][y as usize].explored;
-                if visible {
+                if visible && intensity > 0.0 {
                     // since it's visible, explore it
                     *explored = true;
                 }
@@ -125,11 +168,9 @@ fn render_all(root: &mut Root,
     blit(con, (0, 0), (MAP_WIDTH, MAP_HEIGHT), root, (0, 0), 1.0, 1.0);
 }
 
-fn handle_keys(root: &mut Root, player: &mut Object, map: &Map) -> bool {
-    use tcod::input::Key;
+fn handle_keys(key: Key, root: &mut Root, player_idx: usize, objects: &mut Vec<Object>, map: &Map) -> bool {
     use tcod::input::KeyCode::*;
 
-    let key = root.wait_for_keypress(true);
     match key {
         Key {
             code: Enter,
@@ -140,10 +181,19 @@ fn handle_keys(root: &mut Root, player: &mut Object, map: &Map) -> bool {
             root.set_fullscreen(!fullscreen);
         }
         Key { code: Escape, .. } => return true,
-        Key { code: Up, .. } => player.move_by(0, -1, map),
-        Key { code: Down, .. } => player.move_by(0, 1, map),
-        Key { code: Left, .. } => player.move_by(-1, 0, map),
-        Key { code: Right, .. } => player.move_by(1, 0, map),
+        Key { code: Up, .. } => objects[player_idx].move_by(0, -1, map),
+        Key { code: Down, .. } => objects[player_idx].move_by(0, 1, map),
+        Key { code: Left, .. } => objects[player_idx].move_by(-1, 0, map),
+        Key { code: Right, .. } => objects[player_idx].move_by(1, 0, map),
+        Key { code: Spacebar, .. } => {
+            let (x, y) = {
+                let player = &objects[player_idx];
+                (player.x, player.y)
+            };
+            let mut torch = Object::new(x, y, 'i', colors::COPPER);
+            torch.torch_distance = 5;
+            objects.push(torch);
+        }
 
         _ => {}
     }
@@ -167,10 +217,11 @@ fn main() {
 
     // create object representing the player
     // place the player inside the first room
-    let player = Object::new(player_x, player_y, '@', colors::WHITE);
+    let mut player = Object::new(player_x, player_y, '@', colors::WHITE);
+    player.torch_distance = 5;
 
     // the list of objects with those two
-    let mut objects = [player];
+    let mut objects = vec![player];
 
     // create the FOV map, according to the generated map
     let mut fov_map = FovMap::new(MAP_WIDTH, MAP_HEIGHT);
@@ -186,7 +237,14 @@ fn main() {
     // force FOV "recompute" first time through the game loop
     let mut previous_player_position = (-1, -1);
 
+    let mut key;
+
     while !root.window_closed() {
+        match input::check_for_event(input::MOUSE | input::KEY_PRESS) {
+            Some((_, Event::Key(k))) => key = k,
+            _ => key = Default::default(),
+        }
+        
         // render the screen
         let fov_recompute = previous_player_position != (objects[0].x, objects[0].y);
         render_all(&mut root,
@@ -204,9 +262,11 @@ fn main() {
         }
 
         // handle keys and exit game if needed
-        let player = &mut objects[0];
-        previous_player_position = (player.x, player.y);
-        let exit = handle_keys(&mut root, player, &map);
+        previous_player_position = {
+            let player = &objects[0];
+            (player.x, player.y)
+        };
+        let exit = handle_keys(key, &mut root, 0, &mut objects, &map);
         if exit {
             break;
         }
