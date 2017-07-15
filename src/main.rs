@@ -42,11 +42,7 @@ const COLOR_FOG_GROUND: Color = Color {
     g: 25,
     b: 75,
 };
-const COLOR_FOG_WALL: Color = Color {
-    r: 0,
-    g: 0,
-    b: 50,
-};
+const COLOR_FOG_WALL: Color = Color { r: 0, g: 0, b: 50 };
 
 /// This is a generic object: the player, a monster, an item, the stairs...
 /// It's always represented by a character on screen.
@@ -94,13 +90,13 @@ fn render_all(root: &mut Root,
               con: &mut Offscreen,
               objects: &[Object],
               map: &mut Map,
-              fov_map: &mut FovMap,
-              fov_recompute: bool) {
+              fov_map: &mut FovMap) {
     // Compute lighting
     map.clear_light();
     for object in objects {
         if object.torch_distance > 0 {
-            let torch_intensity_shift = Normal::new(0.0, 0.05).ind_sample(&mut rand::thread_rng()) as f32;
+            let torch_intensity_shift = Normal::new(0.0, 0.05)
+                .ind_sample(&mut rand::thread_rng()) as f32;
             let td = object.torch_distance;
             fov_map.compute_fov(object.x, object.y, td, FOV_LIGHT_WALLS, FOV_ALGO);
             for y in (object.y - td)..(object.y + td + 1) {
@@ -112,7 +108,8 @@ fn render_all(root: &mut Root,
                         continue;
                     }
                     if fov_map.is_in_fov(x, y) {
-                        let d = 1.0 - Map::distance(object.x, object.y, x, y) / (td as f32) + torch_intensity_shift;
+                        let d = 1.0 - Map::distance(object.x, object.y, x, y) / (td as f32) +
+                                torch_intensity_shift;
                         map[x as usize][y as usize].light_intensity += d;
                     }
                 }
@@ -120,39 +117,35 @@ fn render_all(root: &mut Root,
         }
     }
 
-    if true {
-        // recompute FOV if needed (the player moved or something)
-        let player = &objects[0];
-        fov_map.compute_fov(player.x, player.y, SIGHT_RADIUS, FOV_LIGHT_WALLS, FOV_ALGO);
+    let player = &objects[0];
+    fov_map.compute_fov(player.x, player.y, SIGHT_RADIUS, FOV_LIGHT_WALLS, FOV_ALGO);
 
-        // go through all tiles, and set their background color
-        for y in 0..MAP_HEIGHT {
-            for x in 0..MAP_WIDTH {
-                let visible = fov_map.is_in_fov(x, y);
-                let wall = map[x as usize][y as usize].block_sight;
-                let intensity = map[x as usize][y as usize].light_intensity.min(1.0).max(0.0);
-                let color = match (visible, wall) {
-                    // outside of field of view:
-                    (false, true) => COLOR_FOG_WALL,
-                    (false, false) => COLOR_FOG_GROUND,
-                    // inside fov:
-                    (true, true) => {
-                        lerp(COLOR_DARK_WALL, COLOR_LIGHT_WALL, intensity)
-                    },
-                    (true, false) => {
-                        lerp(COLOR_DARK_GROUND, COLOR_LIGHT_GROUND, intensity)
-                    },
-                };
+    // go through all tiles, and set their background color
+    for y in 0..MAP_HEIGHT {
+        for x in 0..MAP_WIDTH {
+            let visible = fov_map.is_in_fov(x, y);
+            let wall = map[x as usize][y as usize].block_sight;
+            let intensity = map[x as usize][y as usize]
+                .light_intensity
+                .min(1.0)
+                .max(0.0);
+            let color = match (visible, wall) {
+                // outside of field of view:
+                (false, true) => COLOR_FOG_WALL,
+                (false, false) => COLOR_FOG_GROUND,
+                // inside fov:
+                (true, true) => lerp(COLOR_DARK_WALL, COLOR_LIGHT_WALL, intensity),
+                (true, false) => lerp(COLOR_DARK_GROUND, COLOR_LIGHT_GROUND, intensity),
+            };
 
-                let explored = &mut map[x as usize][y as usize].explored;
-                if visible && intensity > 0.0 {
-                    // since it's visible, explore it
-                    *explored = true;
-                }
-                if *explored {
-                    // show explored tiles only (any visible tile is explored already)
-                    con.set_char_background(x, y, color, BackgroundFlag::Set);
-                }
+            let explored = &mut map[x as usize][y as usize].explored;
+            if visible && intensity > 0.0 {
+                // since it's visible, explore it
+                *explored = true;
+            }
+            if *explored {
+                // show explored tiles only (any visible tile is explored already)
+                con.set_char_background(x, y, color, BackgroundFlag::Set);
             }
         }
     }
@@ -168,7 +161,12 @@ fn render_all(root: &mut Root,
     blit(con, (0, 0), (MAP_WIDTH, MAP_HEIGHT), root, (0, 0), 1.0, 1.0);
 }
 
-fn handle_keys(key: Key, root: &mut Root, player_idx: usize, objects: &mut Vec<Object>, map: &Map) -> bool {
+fn handle_keys(key: Key,
+               root: &mut Root,
+               player_idx: usize,
+               objects: &mut Vec<Object>,
+               map: &Map)
+               -> bool {
     use tcod::input::KeyCode::*;
 
     match key {
@@ -234,9 +232,6 @@ fn main() {
         }
     }
 
-    // force FOV "recompute" first time through the game loop
-    let mut previous_player_position = (-1, -1);
-
     let mut key;
 
     while !root.window_closed() {
@@ -244,15 +239,9 @@ fn main() {
             Some((_, Event::Key(k))) => key = k,
             _ => key = Default::default(),
         }
-        
+
         // render the screen
-        let fov_recompute = previous_player_position != (objects[0].x, objects[0].y);
-        render_all(&mut root,
-                   &mut con,
-                   &objects,
-                   &mut map,
-                   &mut fov_map,
-                   fov_recompute);
+        render_all(&mut root, &mut con, &objects, &mut map, &mut fov_map);
 
         root.flush();
 
@@ -262,10 +251,6 @@ fn main() {
         }
 
         // handle keys and exit game if needed
-        previous_player_position = {
-            let player = &objects[0];
-            (player.x, player.y)
-        };
         let exit = handle_keys(key, &mut root, 0, &mut objects, &map);
         if exit {
             break;
